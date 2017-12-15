@@ -27,7 +27,10 @@ include_directories(SYSTEM "${source_dir}/libs/json/src")
 link_directories("${source_dir}/libs/gherkin-cpp")
 
 set(SOURCES
+    binary_serialization.cpp
     connection_pool.cpp
+    query_builder.cpp
+    query.cpp
     type_traits.cpp
 )
 
