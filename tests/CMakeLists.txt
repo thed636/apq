@@ -29,6 +29,8 @@ link_directories("${source_dir}/libs/gherkin-cpp")
 set(SOURCES
     connection_pool.cpp
     type_traits.cpp
+    result.cpp
+    value.cpp
 )
 
 set(LIBRARIES
