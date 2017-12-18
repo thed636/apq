@@ -13,6 +13,7 @@ using connection_pool_impl = pool::pool<connection_context<OidMap>>;
 template <typename OidMap>
 class pooled_connection_context {
     using handle_type = typename connection_pool_impl<OidMap>::handle;
+
 public:
     pooled_connection_context(handle_type&& handle)
     : handle_(std::move(handle)) {}
@@ -20,6 +21,7 @@ public:
     decltype(auto) oid_map() noexcept {return handle_->oid_map();}
     decltype(auto) handle() const noexcept {return handle_->handle();}
     decltype(auto) socket() noexcept {return handle_->socket();}
+    decltype(auto) statistics() noexcept {return handle_->statistics();}
 
 private:
     handle_type handle_;

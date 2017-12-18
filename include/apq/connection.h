@@ -29,24 +29,22 @@ struct get_connection_type {
 template <typename ConnectionProvider>
 using connection_type = typename get_connection_type<ConnectionProvider>::type;
 
-using pg_conn_handle = std::unique_ptr<PGconn, decltype(&PQfinish)>;
+using pg_conn_handle = impl::pg_conn_handle;
 
-template <typename OidMap>
+template <typename OidMap, typename Statistics = decltype(hana::make_map())>
 class connection_context {
 public:
-    connection_context(pg_conn_handle&& handle, asio::posix::stream_descriptor&& sock)
-    : handle_(std::move(handle)), socket_(std::move(sock)) {}
-
     OidMap& oid_map() noexcept {return oid_map_;}
-    pg_conn_handle& handle() const noexcept {return handle_;}
+    pg_conn_handle& handle() noexcept {return handle_;}
     asio::posix::stream_descriptor& socket() noexcept {return socket_;}
+    Statistics& statistics() noexcept {return statistics_;}
 
 private:
     pg_conn_handle handle_;
     asio::posix::stream_descriptor socket_;
     OidMap oid_map_;
+    Statistics statistics_; // statistics metatypes to be defined - counter, duration, whatever?
 };
-
 
 template <typename Ctx>
 class basic_connection {
@@ -58,23 +56,23 @@ public:
     using connection_type = basic_connection;
 
     basic_connection() = default;
-    basic_connection(std::shared_ptr<Ctx>&& ctx)
-    : ctx_{std::move(ctx)} {}
+    basic_connection(std::shared_ptr<Ctx> ctx) : ctx_{std::move(ctx)} {}
 
     const auto& oid_map() const noexcept { return ctx_->oid_map(); }
     auto& oid_map() noexcept { return ctx_->oid_map(); }
-    
-    auto handle() const noexcept {
-        return ctx_ ? ctx_->handle().get() : nullptr;
-    }
+
+    const auto& handle() const noexcept { return ctx_->handle();}
 
     auto& socket() noexcept {return ctx_->socket();}
     const auto& socket() const noexcept {return ctx_->socket();}
 
+    auto& statistics() noexcept { return ctx_->statistics();}
+    const auto& statistics() const noexcept { return ctx_->statistics();}
+
     operator bool () const noexcept { return !!(*this); }
     bool operator ! () const noexcept { 
         using impl::connection_bad;
-        return !(handle() && !connection_bad(handle())); 
+        return !(ctx_ && handle() && !connection_bad(handle())); 
     }
 
     // basic_connection can be ConnectionProvider, so it provides itself
@@ -82,6 +80,7 @@ public:
     friend void async_get_connection(io_context& io, basic_connection c, Handler&& h) {
         io.dispatch(detail::bind(std::forward<Handler>(h), error_code{}, std::move(c)));
     }
+
 private:
     std::shared_ptr<Ctx> ctx_;
 };
@@ -93,7 +92,7 @@ inline bool operator == (const basic_connection<Ctx>& l, const basic_connection<
 
 template <typename Ctx>
 inline bool operator != (const basic_connection<Ctx>& l, const basic_connection<Ctx>& r) noexcept {
-    return l.handle() == r.handle();
+    return !(l.handle() == r.handle());
 }
 
 template <typename T, typename Ctx>

@@ -1,33 +1,34 @@
 #pragma once
 
 #include <apg/connection.h>
-#include <apg/impl/make_connection.h>
+#include <apg/impl/async_connect.h>
 
 namespace libapq {
 
 namespace detail {
 
-template <typename Handler>
-struct construct_connection {
+template <typename Handler, typename Context>
+struct connection_handler {
     Handler handler_;
+    std::shared_ptr<Context> conn_;
 
-    construct_connection(Handler& handler)
-     : handler_(std::move(handler)) {}
+    connection_handler(Handler& handler, std::shared_ptr<Context> conn)
+     : handler_{std::move(handler)}, conn_{conn} {}
 
-    template <typename OidMap>
-    void operator() (error_code ec, std::shared_ptr<connection_context<OidMap>>&& impl) {
-        handler_(std::move(ec), connection<OidMap>{std::move(impl)});
+    void operator() (error_code ec) {
+        handler_(std::move(ec), basic_connection<Context>{std::move(conn_)});
     }
 
-    template <typename Function>
-    inline void asio_handler_invoke(Function&& f, construct_connection* ctx) {
-        asio_handler_invoke(std::forward<Function>(f), std::addressof(ctx->handler_));
+    template <typename Func>
+    inline void asio_handler_invoke(Func&& f, connection_handler* ctx) {
+        asio_handler_invoke(std::forward<Function>(f), 
+            std::addressof(ctx->handler_));
     }
 };
 
 } // namespace detail
 
-template <typename OidMap>
+template <typename OidMap, typename Statistics = void>
 class connection_info {
     std::string raw_;
 public:
@@ -38,8 +39,12 @@ public:
 
     template <typename Handler>
     friend void async_get_connection(io_context& io, connection_info const& c, Handler&& h) {
-        impl::make_connection<OidMap>(io, c.to_string(), 
-            construct_connection<std::decay_t<Handler>>{h});
+        using ctx_type = connection_context<OidMap, Statistics>;
+        using handler_type = detail::connection_handler<std::decay_t<Handler>, ctx_type>;
+
+        auto conn = std::make_shared<ctx_type>();
+        impl::async_connect(io, *conn, c.to_string(), 
+            handler_type{std::forward<Handler>(h), conn});
     }
 };
 
