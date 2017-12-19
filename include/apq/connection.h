@@ -17,8 +17,8 @@ namespace libapq {
 * pool, lazy connection, retriable connection and so on. 
 */
 template <typename ConnectionProvider, typename Handler>
-void async_get_connection(io_context& io, ConnectionProvider&& provider, Handler&& handler) {
-    provider(io, std::forward<Handler>(handler));
+void async_get_connection(ConnectionProvider&& provider, Handler&& handler) {
+    provider(std::forward<Handler>(handler));
 }
 
 template <typename ConnectionProvider>
@@ -29,101 +29,108 @@ struct get_connection_type {
 template <typename ConnectionProvider>
 using connection_type = typename get_connection_type<ConnectionProvider>::type;
 
-using pg_conn_handle = impl::pg_conn_handle;
+using no_statistics = decltype(hana::make_map());
 
-template <typename OidMap, typename Statistics = decltype(hana::make_map())>
-class connection_context {
-public:
-    OidMap& oid_map() noexcept {return oid_map_;}
-    pg_conn_handle& handle() noexcept {return handle_;}
-    asio::posix::stream_descriptor& socket() noexcept {return socket_;}
-    Statistics& statistics() noexcept {return statistics_;}
+namespace detail {
 
-private:
-    pg_conn_handle handle_;
-    asio::posix::stream_descriptor socket_;
-    OidMap oid_map_;
-    Statistics statistics_; // statistics metatypes to be defined - counter, duration, whatever?
-};
+template <typename T>
+decltype(auto) get_connection_context(T&& t) {return std::forward<T>(t);}
 
-template <typename Ctx>
-class basic_connection {
+}
+
+template <typename ContextHolder>
+class connection {
 public:
     /**
-    * A connection type is provided by the basic_connection as 
+    * A connection type is provided by the connection as 
     * a ConnectionProvider
     */
-    using connection_type = basic_connection;
+    using connection_type = connection;
 
-    basic_connection() = default;
-    basic_connection(std::shared_ptr<Ctx> ctx) : ctx_{std::move(ctx)} {}
+    connection() = default;
+    connection(ContextHolder ctx) : ctx_{std::move(ctx)} {}
 
-    const auto& oid_map() const noexcept { return ctx_->oid_map(); }
-    auto& oid_map() noexcept { return ctx_->oid_map(); }
-
-    const auto& handle() const noexcept { return ctx_->handle();}
-
-    auto& socket() noexcept {return ctx_->socket();}
-    const auto& socket() const noexcept {return ctx_->socket();}
-
-    auto& statistics() noexcept { return ctx_->statistics();}
-    const auto& statistics() const noexcept { return ctx_->statistics();}
-
-    operator bool () const noexcept { return !!(*this); }
-    bool operator ! () const noexcept { 
-        using impl::connection_bad;
-        return !(ctx_ && handle() && !connection_bad(handle())); 
+    auto& context() noexcept {
+        using detail::get_connection_context;
+        return get_connection_context(ctx_);
+    }
+    const auto& context() const noexcept {
+        using detail::get_connection_context;
+        return get_connection_context(ctx_);
     }
 
-    // basic_connection can be ConnectionProvider, so it provides itself
+    decltype(auto) get_io_context() noexcept {return context().socket_.get_io_context();}
+
+    /**
+    * Returns a reference to statistics of the connection
+    */
+    auto& statistics() noexcept { return context(ctx_).statistics_;}
+    const auto& statistics() const noexcept {return context(ctx_).statistics_;}
+
+    /**
+    * Returns true for initialized established and good connection
+    */
+    operator bool () const noexcept {return !!(*this); }
+    bool operator ! () const noexcept { 
+        using impl::connection_bad;
+        return !(ctx_ && !connection_bad(context())); 
+    }
+
+    /**
+    * connection can be ConnectionProvider, so it provides itself
+    */
     template <typename Handler>
-    friend void async_get_connection(io_context& io, basic_connection c, Handler&& h) {
-        io.dispatch(detail::bind(std::forward<Handler>(h), error_code{}, std::move(c)));
+    friend void async_get_connection(connection c, Handler&& h) {
+        get_io_context().dispatch(detail::bind(
+            std::forward<Handler>(h), error_code{}, std::move(c)));
     }
 
 private:
-    std::shared_ptr<Ctx> ctx_;
+    ContextHolder ctx_;
 };
 
 template <typename Ctx>
-inline bool operator == (const basic_connection<Ctx>& l, const basic_connection<Ctx>& r) noexcept {
-    return l.handle() == r.handle();
+inline bool operator == (const connection<Ctx>& l, const connection<Ctx>& r) noexcept {
+    return std::addressof(l.context()) == std::addressof(r.context());
 }
 
 template <typename Ctx>
-inline bool operator != (const basic_connection<Ctx>& l, const basic_connection<Ctx>& r) noexcept {
-    return !(l.handle() == r.handle());
+inline bool operator != (const connection<Ctx>& l, const connection<Ctx>& r) noexcept {
+    return !(l == r);
 }
 
 template <typename T, typename Ctx>
-inline auto type_oid(const basic_connection<Ctx>& conn) noexcept {
-    return type_oid<std::decay_t<T>>(conn.oid_map());
+inline auto type_oid(const connection<Ctx>& conn) noexcept {
+    return type_oid<std::decay_t<T>>(conn.context().oid_map_);
 }
 
 template <typename T, typename Ctx>
-inline auto type_oid(const basic_connection<Ctx>& conn, const T&) noexcept {
+inline auto type_oid(const connection<Ctx>& conn, const T&) noexcept {
     return type_oid<std::decay_t<T>>(conn);
 }
 
 template <typename T, typename Ctx>
-inline void set_type_oid(basic_connection<Ctx>& conn, oid_t oid) noexcept {
-    set_type_oid<T>(conn.oid_map(), oid);
+inline void set_type_oid(connection<Ctx>& conn, oid_t oid) noexcept {
+    set_type_oid<T>(conn.context().oid_map_, oid);
 }
-
-template <typename OidMap>
-using connection = basic_connection<connection_context<OidMap>>;
 
 /**
 * Function to get a connection from provider. 
+* Accepts:,
+*   provider - connection provider which will be asked for connection
+*   token - completion token which determine the continuation of operation
+*           it can be callback, yield_context, use_future and other Boost.Asio
+*           compatible tokens.
+* Returns:
+*   completion token depent value like void for callback, connection for the
+*   yield_context, std::future<connection> for use_future, and so on.
 */
 template <typename ConnectionProvider, typename CompletionToken>
-auto get_connection(io_context& io, ConnectionProvider&& provider, CompletionToken&& token) {
-    detail::async_result_init<
-        CompletionToken, 
-        void (error_code, connection_type<ConnectionProvider>)
-    > init(std::forward<CompletionToken>(token));
+auto get_connection(ConnectionProvider&& provider, CompletionToken&& token) {
+    using signature_t = void (error_code, connection_type<ConnectionProvider>);
+    async_completion<CompletionToken, signature_t> init(std::forward<CompletionToken>(token));
 
-    async_get_connection(io, std::forward<ConnectionProvider>(provider), 
+    async_get_connection(std::forward<ConnectionProvider>(provider), 
             std::move(init.handler));
 
     return init.result.get();

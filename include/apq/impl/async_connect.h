@@ -7,63 +7,48 @@
 namespace libapq {
 namespace impl {
 
-template <typename OidMap, typename Handler>
-inline void write_poll(connection_context<OidMap>& conn, Handler&& h) {
-    conn.socket().async_write_some(
+template <typename Handler, typename ConnectionContext>
+inline void write_poll(ConnectionContext& conn, Handler&& h) {
+    conn.socket_.async_write_some(
             asio::null_buffers(), std::forward<Handler>(h));
 }
 
-template <typename OidMap, typename Handler>
-inline void read_poll(connection_context<OidMap>& conn, Handler&& h) {
-    conn.socket().async_read_some(
+template <typename Handler, typename ConnectionContext>
+inline void read_poll(ConnectionContext& conn, Handler&& h) {
+    conn.socket_.async_read_some(
             asio::null_buffers(), std::forward<Handler>(h));
 }
 
-template <typename OidMap, typename Handler>
-inline auto connect_poll(connection_context<OidMap>& conn) {
-    return PQconnectPoll(conn.handle().get());
+template <typename Handler, typename ConnectionContext>
+inline decltype(auto) connect_poll(ConnectionContext& conn) {
+    return PQconnectPoll(conn.handle_.get());
 }
 
-inline pg_conn_handle start_connection(const std::string& conninfo) {
-    return {PQconnectStart(conninfo.c_str()), PQfinish};
-}
-
-inline error_code assign_socket(pg_conn_handle& handle, asio::posix::stream_descriptor& socket) {
-    int fd = PQsocket(handle.get());
-    if (fd == -1) {
-        return make_error_code(error::network,
-            "No server connection is currently open, no PQsocket");
+template <typename Handler, typename ConnectionContext>
+inline error_code start_connection(ConnectionContext& conn, const std::string& conninfo) {
+    conn.handle_.assign(PQconnectStart(conninfo.c_str()), PQfinish);
+    if (!conn_.handle_) {
+        return done(make_error_code(error::network, "Failed to allocate a new PGconn"));
     }
-
-    int new_fd = dup(fd);
-    if (new_fd == -1) {
-        using namespace boost::system;
-        return make_error_code(error_code{errno, get_posix_category()},
-            "dup(fd)");
-    }
-
-    error_code ec;
-    socket.assign(new_fd, ec);
-
-    return ec;
+    return {};
 }
 
 /**
 * Asynchronous connection operation
 */
-template <typename IoContext, typename Handler, typename ConnCtx>
+template <typename Handler, typename ConnectionContext>
 struct async_connect_op {
-    async_connect_op(IoContext& io, ConnCtx& conn, Handler& handler)
-    : io_(io), conn_(conn), handler_(std::move(handler)) {}
+    ConnectionContext& conn_;
+    Handler handler_;
 
     void done(error_code ec = error_code{}) {
-        io_.post(bind(std::move(handler_), std::move(ec)));
+        conn_.get_io_context().post(bind(std::move(handler_), std::move(ec)));
     }
 
     void perform(const std::string& conninfo) {
-        conn_.handle() = start_connection(conninfo);
-        if (!conn_.handle()) {
-            return done(make_error_code(error::network, "Failed to allocate a new PGconn"));
+        error_code ec = start_connection(conn_, conninfo);
+        if (ec) {
+            return done(ec);
         }
 
         if (connection_bad(conn_.handle())) {
@@ -77,7 +62,7 @@ struct async_connect_op {
             return done(make_error_code(error::network, msg.str()));
         }
 
-        error_code ec = assign_socket(conn_.handle(), conn_.socket());
+        ec = assign_socket(conn_);
         if (ec) {
             return done(ec);
         }
@@ -105,25 +90,21 @@ struct async_connect_op {
             break;
         }
 
-        done(make_error_code(error::network, error_message(conn_.handle().get())));
+        done(make_error_code(error::network, error_message(conn_.handle())));
     }
 
     template <typename Func>
     friend void asio_handler_invoke(Func&& f, async_connect_op* ctx) {
-        using boost::asio::asio_handler_invoke;
+        using ::boost::asio::asio_handler_invoke;
         asio_handler_invoke(std::forward<Func>(f), std::addressof(ctx->handler_));
     }
-
-    IoContext& io_;
-    ConnCtx& conn_;
-    Handler handler_;
 };
 
-template <typename IoContext, typename Connection, typename Handler>
-inline void async_connect(IoContext& io, const std::string& conninfo,
-        Connection&& conn, Handler&& handler) {
-    async_connect_op<IoContext, std::decay_t<Handler>, std::decay_t<Connection>> {
-        io, std::forward<Connection>(conn), std::forward<Handler>(handler)
+template <typename ConnectionContext, typename Handler>
+inline void async_connect(const std::string& conninfo, ConnectionContext& conn,
+        Handler&& handler) {
+    async_connect_op<std::decay_t<Handler>, ConnectionContext> {
+        conn, std::forward<Handler>(handler)
     }.perform(conninfo);
 }
 

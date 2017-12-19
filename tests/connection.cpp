@@ -18,10 +18,6 @@ struct test_conn_handle {
     test_conn_handle(native_handle v) : v(v) {}
 };
 
-inline bool connection_bad(const std::unique_ptr<test_conn_handle>& h) { 
-    return h->v == native_handle::bad;
-}
-
 using empty_oid_map = decltype(libapq::register_types<>());
 
 template <typename OidMap = empty_oid_map>
@@ -36,7 +32,24 @@ struct connection_ctx {
 };
 
 template <typename OidMap = empty_oid_map>
-using connection = libapq::basic_connection<connection_ctx<OidMap>>;
+using connection = libapq::connection<std::shared_ptr<connection_ctx<OidMap>>>;
+
+// namespace libapq {
+// namespace detail {
+
+template <typename OidMap>
+inline decltype(auto) get_connection_context(const std::shared_ptr<connection_ctx<OidMap>>& ptr) {
+    return *ptr;
+}
+
+// }
+// }
+
+
+template <typename OidMap>
+inline bool connection_bad(const connection_ctx<OidMap>& ctx) { 
+    return ctx.handle_->v == native_handle::bad;
+}
 
 GTEST("libapq::connection::operator bool()", "[default constructed object returns false]") {
     connection<> conn;
