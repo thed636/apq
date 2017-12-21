@@ -4,29 +4,33 @@
 #include <yamail/resource_pool/async/pool.hpp>
 
 namespace libapq {
-
-namespace pool = yamail::resource_pool::async;
-
-
-
 namespace impl {
 
-template <typename OidMap, typename Statistics>
-using connection_pool = pool::pool<connection_context<OidMap, Statistics>>;
+template <typename ...Ts>
+using connection_pool = yamail::resource_pool::async::pool<connection<Ts...>>;
 
-template <typename OidMap, typename Statistics>
-using pooled_connection_ctx_ptr = std::shared_ptr<typename connection_pool<OidMap, Statistics>::handle>;
+template <typename ...Ts>
+using pooled_connection = yamail::resource_pool::handle<connection_pool<Ts...>>;
 
-}
+template <typename ...Ts>
+using pooled_connection_ptr = std::shared_ptr<pooled_connection<Ts...>>;
 
-namespace detail {
+} // namespace impl
 
-template <typename OidMap, typename Statistics>
-inline decltype(auto) get_context(const impl::pooled_connection_ctx_ptr<OidMap, Statistics>& ptr) {
-    return ptr->get();
-}
+template <typename T>
+struct is_connection_wrapper<
+    yamail::resource_pool::handle<
+        yamail::resource_pool::async::pool<T>
+    >> : is_connection<T> {};
 
-}
+template <typename T>
+struct is_connection_wrapper< std::shared_ptr<
+    yamail::resource_pool::handle<
+        yamail::resource_pool::async::pool<T>
+    >>> : is_connection<T> {};
+
+static_assert(Connection<impl::pooled_connection_ptr<empty_oid_map, no_statistics>>, 
+    "pooled_connection_ptr is not a Connection concept");
 
 class connection_pool {
 public:

@@ -9,13 +9,19 @@
 
 
 namespace libapq {
+
+template <typename, typename = std::void_t<>>
+struct is_connection : std::false_type {};
+
 namespace impl {
+
+using pg_native_handle_type = PGconn*;
 
 using pg_conn_handle = std::unique_ptr<PGconn, decltype(&PQfinish)>;
 
 template <typename OidMap, typename Statistics>
-struct connection_context {
-    connection_context(io_context& io, Statistics statistics)
+struct connection {
+    connection(io_context& io, Statistics statistics)
     : socket_(io), statistics_(std::move(statistics)) {}
 
     pg_conn_handle handle_;
@@ -24,39 +30,76 @@ struct connection_context {
     Statistics statistics_; // statistics metatypes to be defined - counter, duration, whatever?
 };
 
-template <typename OidMap, typename Statistics>
-inline auto& get_connection_context(
-        connection_context<OidMap, Statistics>& ctx) noexcept {
-    return ctx;
-}
-
-template <typename OidMap, typename Statistics>
-inline auto& get_connection_context(
-        const connection_context<OidMap, Statistics>& ctx) noexcept {
-    return ctx;
-}
-
-template <typename OidMap, typename Statistics>
-inline decltype(auto) get_native_handle(
-        connection_context<OidMap, Statistics>& ctx) noexcept {
+template <typename ...Ts>
+inline pg_native_handle_type get_pg_native_handle(
+        const connection<Ts...>& ctx) noexcept {
     return ctx.handle_.get();
 }
 
-template <typename OidMap, typename Statistics>
-inline bool connection_bad(connection_context<OidMap, Statistics>& ctx) noexcept {
-    decltype(auto) handle = get_native_handle(ctx);
+template <typename ...Ts>
+inline void set_pg_native_handle(
+        connection<Ts...>& ctx, pg_conn_handle&& new_one) noexcept {
+    ctx.handle_ = new_one;
+}
+
+template <typename ...Ts>
+inline bool connection_bad(
+        const connection<Ts...>& ctx) noexcept {
+    decltype(auto) handle = get_pg_native_handle(ctx);
     return !handle || PQstatus(handle) == CONNECTION_BAD;
 }
 
-template <typename OidMap, typename Statistics>
-inline std::string error_message(connection_context<OidMap, Statistics>& ctx) {
-    const char* msg = PQerrorMessage(get_native_handle(ctx));
+template <typename ...Ts>
+inline decltype(auto) get_connection_socket(
+        const connection<Ts...>& ctx) noexcept {
+    return ctx.socket_;
+}
+
+template <typename ...Ts>
+inline decltype(auto) get_connection_socket(
+        connection<Ts...>& ctx) noexcept {
+    return ctx.socket_;
+}
+
+template <typename ...Ts>
+inline decltype(auto) get_connection_io_context(
+        connection<Ts...>& ctx) noexcept {
+    return get_connection_socket(ctx).get_io_context();
+}
+
+template <typename ...Ts>
+inline decltype(auto) get_connection_oid_map(
+        const connection<Ts...>& ctx) noexcept {
+    return ctx.oid_map_;
+}
+
+template <typename ...Ts>
+inline decltype(auto) get_connection_oid_map(
+        connection<Ts...>& ctx) noexcept {
+    return ctx.oid_map_;
+}
+
+template <typename ...Ts>
+inline decltype(auto) get_connection_statistics(
+        const connection<Ts...>& ctx) noexcept {
+    return ctx.statistics_;
+}
+
+template <typename ...Ts>
+inline decltype(auto) get_connection_statistics(
+        connection<Ts...>& ctx) noexcept {
+    return ctx.statistics_;
+}
+
+template <typename Connection>
+inline std::string error_message(Connection&& conn) {
+    const char* msg = PQerrorMessage(get_pg_native_handle(std::forward<Connection>(conn)));
     return msg ? boost::trim_right_copy(std::string(msg)) : std::string{};
 }
 
-template <typename OidMap, typename Statistics>
-inline error_code assign_socket(connection_context<OidMap, Statistics>& ctx) {
-    int fd = PQsocket(get_native_handle(ctx));
+template <typename Connection>
+inline error_code assign_socket(Connection&& conn) {
+    int fd = PQsocket(get_pg_native_handle(conn));
     // if (fd == -1) {
     //     return make_error_code(error::network,
     //         "No server connection is currently open, no PQsocket");
@@ -70,25 +113,30 @@ inline error_code assign_socket(connection_context<OidMap, Statistics>& ctx) {
     }
 
     error_code ec;
-    ctx.socket_.assign(new_fd, ec);
+    get_connection_socket(conn).assign(new_fd, ec);
 
     return ec;
 }
 
-template <typename OidMap, typename Statistics>
-inline error_code rebind_io_context(connection_context<OidMap, Statistics>& ctx, io_context& io) {
-    if (std::addressof(ctx.socket_.get_io_service()) != std::addressof(io)) {
+template <typename Connection>
+inline error_code rebind_io_context(Connection&& conn, io_context& io) {
+    if (std::addressof(get_connection_io_service(conn)) != std::addressof(io)) {
         asio::posix::stream_descriptor s{io};
         error_code ec;
-        s.assign(ctx.socket_.native_handle(), ec);
+        decltype(auto) socket = get_connection_socket(conn);
+        s.assign(socket.native_handle(), ec);
         if (ec) {
             return ec;
         }
-        ctx.socket_.release();
-        ctx.socket_ = std::move(s);
+        socket.release();
+        socket = std::move(s);
     }
     return {};
 }
 
 } // namespace impl
+
+template <typename ...Ts>
+struct is_connection<impl::connection<Ts...>> : std::true_type {};
+
 } // namespace libapq

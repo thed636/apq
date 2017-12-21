@@ -7,42 +7,44 @@
 namespace libapq {
 namespace impl {
 
-template <typename Handler, typename ConnectionContext>
-inline void write_poll(ConnectionContext& conn, Handler&& h) {
-    conn.socket_.async_write_some(
+template <typename Handler, typename Connection>
+inline void write_poll(Connection& conn, Handler&& h) {
+    get_connection_socket(conn).async_write_some(
             asio::null_buffers(), std::forward<Handler>(h));
 }
 
-template <typename Handler, typename ConnectionContext>
-inline void read_poll(ConnectionContext& conn, Handler&& h) {
-    conn.socket_.async_read_some(
+template <typename Handler, typename Connection>
+inline void read_poll(Connection& conn, Handler&& h) {
+    get_connection_socket(conn).async_read_some(
             asio::null_buffers(), std::forward<Handler>(h));
 }
 
-template <typename Handler, typename ConnectionContext>
-inline decltype(auto) connect_poll(ConnectionContext& conn) {
-    return PQconnectPoll(conn.handle_.get());
+template <typename Connection>
+inline decltype(auto) connect_poll(Connection& conn) {
+    return PQconnectPoll(get_pg_native_handle(conn));
 }
 
-template <typename Handler, typename ConnectionContext>
-inline error_code start_connection(ConnectionContext& conn, const std::string& conninfo) {
-    conn.handle_.assign(PQconnectStart(conninfo.c_str()), PQfinish);
-    if (!conn_.handle_) {
+template <typename Handler, typename Connection>
+inline error_code start_connection(Connection& conn, const std::string& conninfo) {
+    pg_conn_handle handle(PQconnectStart(conninfo.c_str()), PQfinish);
+    if (!handle) {
         return done(make_error_code(error::network, "Failed to allocate a new PGconn"));
     }
+    set_pg_native_handle(conn, std::move(handle));
     return {};
 }
 
 /**
 * Asynchronous connection operation
 */
-template <typename Handler, typename ConnectionContext>
+template <typename Handler, typename Context>
 struct async_connect_op {
-    ConnectionContext& conn_;
+    Context& conn_;
     Handler handler_;
 
     void done(error_code ec = error_code{}) {
-        conn_.get_io_context().post(bind(std::move(handler_), std::move(ec)));
+        get_connection_io_context(conn_)
+            .post(bind(std::move(handler_), std::move(ec)));
     }
 
     void perform(const std::string& conninfo) {
@@ -51,10 +53,10 @@ struct async_connect_op {
             return done(ec);
         }
 
-        if (connection_bad(conn_.handle())) {
+        if (connection_bad(conn_)) {
             std::ostringstream msg;
             msg << "Connection is bad";
-            const auto error = error_message(conn_.handle());
+            const auto error = error_message(conn_);
             if (!error.empty()) {
                 msg << ": " << error;
             }
@@ -100,10 +102,10 @@ struct async_connect_op {
     }
 };
 
-template <typename ConnectionContext, typename Handler>
-inline void async_connect(const std::string& conninfo, ConnectionContext& conn,
+template <typename Connection, typename Handler>
+inline void async_connect(const std::string& conninfo, Connection& conn,
         Handler&& handler) {
-    async_connect_op<std::decay_t<Handler>, ConnectionContext> {
+    async_connect_op<std::decay_t<Handler>, Connection> {
         conn, std::forward<Handler>(handler)
     }.perform(conninfo);
 }

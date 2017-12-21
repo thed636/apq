@@ -9,15 +9,6 @@ namespace libapq {
 
 namespace detail {
 
-template <typename OidMap, typename Statistics>
-using connection_context_ptr = std::shared_ptr<impl::connection_context<OidMap, Statistics>>;
-
-template <typename OidMap, typename Statistics>
-inline decltype(auto) get_connection_context(
-        const connection_context_ptr<OidMap, Statistics>& ptr) noexcept {
-    return *ptr;
-}
-
 template <typename Handler, typename Connection>
 struct connection_handler {
     Handler handler_;
@@ -42,24 +33,26 @@ class connection_info {
     std::string raw_;
     Statistics statistics_;
 
-    using context_type = connection_context<OidMap, Statistics>;
+    using connection_ctx = impl::connection<OidMap, Statistics>;
 public:
     connection_info(io_context& io, std::string conn_str, Statistics statistics = Statistics{})
     : io_(io), conn_str_(std::move(conn_str)), timeout_(timeout), statistics_(statistics) {}
 
     std::string to_string() const {return raw_;}
 
-    using connection_type = connection<std::shared_ptr<context_type>>;
+    using connection_type = std::shared_ptr<connection_ctx>;
 
     io_context& get_io_context() {return io_;}
 
     template <typename Handler>
     friend void async_get_connection(const connection_info& self, Handler&& h) {
-        using handler_type = detail::connection_handler<std::decay_t<Handler>, context_type>;
+        using handler_type = detail::connection_handler<std::decay_t<Handler>, connection_type>;
 
-        auto ctx = std::make_shared<context_type>(self.get_io_context(), self.statistics_);
+        auto conn = std::make_shared<connection_ctx>(
+            self.get_io_context(), self.statistics_);
+
         impl::async_connect(ctx, self.to_string(), 
-            handler_type{std::forward<Handler>(h), connection_type{ctx}});
+            handler_type{std::forward<Handler>(h), conn});
     }
 };
 

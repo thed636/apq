@@ -22,106 +22,63 @@ using empty_oid_map = decltype(libapq::register_types<>());
 
 template <typename OidMap = empty_oid_map>
 struct connection_ctx {
-    auto& oid_map() noexcept {return oid_map_;}
-    auto& handle() const noexcept {return handle_;}
-    auto& socket() noexcept {return socket_;}
-
     std::unique_ptr<test_conn_handle> handle_;
     int socket_ = 0;
     OidMap oid_map_;
+
+    friend bool connection_bad(const connection_ctx& conn) { 
+        return conn.handle_->v == native_handle::bad;
+    }
 };
 
-template <typename OidMap = empty_oid_map>
-using connection = libapq::connection<std::shared_ptr<connection_ctx<OidMap>>>;
+template <typename ...Ts>
+using connection = std::shared_ptr<connection_ctx<Ts...>>;
 
-// namespace libapq {
-// namespace detail {
+namespace libapq {
 
-template <typename OidMap>
-inline decltype(auto) get_connection_context(const std::shared_ptr<connection_ctx<OidMap>>& ptr) {
-    return *ptr;
+template <typename ...Ts>
+struct is_connection<::connection_ctx<Ts...>> : std::true_type {};
+
 }
 
-// }
-// }
-
-
-template <typename OidMap>
-inline bool connection_bad(const connection_ctx<OidMap>& ctx) { 
-    return ctx.handle_->v == native_handle::bad;
-}
-
-GTEST("libapq::connection::operator bool()", "[default constructed object returns false]") {
-    connection<> conn;
-    EXPECT_FALSE(conn);
-}
-
-GTEST("libapq::connection::operator bool()", "[object with bad handle returns false]") {
+GTEST("libapq::connection_good()", "[for object with bad handle returns false]") {
     auto ctx = std::make_shared<connection_ctx<>>();
     ctx->handle_ = std::make_unique<test_conn_handle>(native_handle::bad);
     connection<> conn{std::move(ctx)};
-    EXPECT_FALSE(conn);
+    EXPECT_FALSE(libapq::connection_good(conn));
 }
 
+GTEST("libapq::connection_good()", "[for object with nullptr returns false]") {
+    connection<> conn;
+    EXPECT_FALSE(libapq::connection_good(conn));
+}
 
-GTEST("libapq::connection::operator bool()", "[object with good handle returns true]") {
+GTEST("libapq::connection_good()", "[for object with good handle returns true]") {
     auto ctx = std::make_shared<connection_ctx<>>();
     ctx->handle_ = std::make_unique<test_conn_handle>(native_handle::good);
     connection<> conn{std::move(ctx)};
-    EXPECT_TRUE(conn);
+    EXPECT_TRUE(libapq::connection_good(conn));
 }
 
-GTEST("libapq::connection::operator !()", "[default constructed object returns true]") {
-    connection<> conn;
-    EXPECT_TRUE(!conn);
-}
-
-GTEST("libapq::connection::operator !()", "[object with bad handle returns true]") {
+GTEST("libapq::connection_bad()", "[for object with bad handle returns true]") {
     auto ctx = std::make_shared<connection_ctx<>>();
     ctx->handle_ = std::make_unique<test_conn_handle>(native_handle::bad);
     connection<> conn{std::move(ctx)};
-    EXPECT_TRUE(!conn);
+    EXPECT_TRUE(libapq::connection_bad(conn));
 }
 
-GTEST("libapq::connection::operator !()", "[object with good handle returns false]") {
+GTEST("libapq::connection_bad()", "[for object with nullptr returns true]") {
+    connection<> conn;
+    EXPECT_FALSE(libapq::connection_good(conn));
+}
+
+GTEST("libapq::connection_bad()", "[for object with good handle returns false]") {
     auto ctx = std::make_shared<connection_ctx<>>();
     ctx->handle_ = std::make_unique<test_conn_handle>(native_handle::good);
     connection<> conn{std::move(ctx)};
-    EXPECT_FALSE(!conn);
+    EXPECT_FALSE(libapq::connection_bad(conn));
 }
 
-GTEST("libapq::connection::operator ==()", "[for objects with same handle returns true]") {
-    auto ctx = std::make_shared<connection_ctx<>>();
-    ctx->handle_ = std::make_unique<test_conn_handle>(native_handle::good);
-    connection<> conn1{ctx};
-    connection<> conn2{ctx};
-    EXPECT_TRUE(conn1 == conn2);
-}
-
-GTEST("libapq::connection::operator ==()", "[for objects with different handle returns false]") {
-    auto ctx1 = std::make_shared<connection_ctx<>>();
-    ctx1->handle_ = std::make_unique<test_conn_handle>(native_handle::good);
-    connection<> conn1{ctx1};
-    auto ctx2 = std::make_shared<connection_ctx<>>();
-    ctx2->handle_ = std::make_unique<test_conn_handle>(native_handle::good);
-    connection<> conn2{ctx2};
-    EXPECT_FALSE(conn1 == conn2);
-}
-
-GTEST("libapq::connection::operator !=()", "[for objects with same handle returns false]") {
-    auto ctx = std::make_shared<connection_ctx<>>();
-    ctx->handle_ = std::make_unique<test_conn_handle>(native_handle::good);
-    connection<> conn1{ctx};
-    connection<> conn2{ctx};
-    EXPECT_FALSE(conn1 != conn2);
-}
-
-GTEST("libapq::connection::operator !=()", "[object with different handle returns true]") {
-    auto ctx1 = std::make_shared<connection_ctx<>>();
-    ctx1->handle_ = std::make_unique<test_conn_handle>(native_handle::good);
-    connection<> conn1{ctx1};
-    auto ctx2 = std::make_shared<connection_ctx<>>();
-    ctx2->handle_ = std::make_unique<test_conn_handle>(native_handle::good);
-    connection<> conn2{ctx2};
-    EXPECT_TRUE(conn1 != conn2);
+GTEST("ZZZZ", "[ZZZZZ]") {
+    EXPECT_FALSE(libapq::is_connection<int>::value);
 }

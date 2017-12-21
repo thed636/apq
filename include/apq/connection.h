@@ -10,18 +10,9 @@
 
 namespace libapq {
 
-/**
-* Function to get connection from provider asynchronously via callback. 
-* This is customization point which allows to work with different kinds
-* of connection providing. E.g. single connection, get connection from 
-* pool, lazy connection, retriable connection and so on. 
-*/
-template <typename ConnectionProvider, typename Handler>
-void async_get_connection(ConnectionProvider&& provider, Handler&& handler) {
-    provider(std::forward<Handler>(handler));
-}
+using impl::pg_conn_handle;
 
-template <typename ConnectionProvider>
+template <typename ConnectionProvider, typename Enable = void>
 struct get_connection_type {
     using type = typename std::decay_t<ConnectionProvider>::connection_type;
 };
@@ -31,92 +22,174 @@ using connection_type = typename get_connection_type<ConnectionProvider>::type;
 
 using no_statistics = decltype(hana::make_map());
 
-namespace detail {
+/**
+* Marker to tag a connection type.
+*/
+// template <typename, typename = std::void_t<>>
+// struct is_connection : std::false_type {};
+
+template <typename, typename = std::void_t<>>
+struct is_connection_wrapper : std::false_type {};
 
 template <typename T>
-decltype(auto) get_connection_context(T&& t) {return std::forward<T>(t);}
+struct is_connection_wrapper<::std::shared_ptr<T>> : is_connection<T> {};
+template <typename T, typename D>
+struct is_connection_wrapper<::std::unique_ptr<T, D>> : is_connection<T> {};
+template <typename T>
+struct is_connection_wrapper<::std::optional<T>> : is_connection<T> {};
+template <typename T>
+struct is_connection_wrapper<::boost::shared_ptr<T>> : is_connection<T> {};
+template <typename T>
+struct is_connection_wrapper<::boost::scoped_ptr<T>> : is_connection<T> {};
+template <typename T>
+struct is_connection_wrapper<::boost::optional<T>> : is_connection<T> {};
 
-}
+template <typename T>
+constexpr auto ConnectionWrapper = is_connection_wrapper<std::decay_t<T>>::value;
 
-template <typename ContextHolder>
-class connection {
-public:
-    /**
-    * A connection type is provided by the connection as 
-    * a ConnectionProvider
-    */
-    using connection_type = connection;
+template <typename T>
+constexpr auto Connection = is_connection<std::decay_t<T>>::value || ConnectionWrapper<T>;
 
-    connection() = default;
-    connection(ContextHolder ctx) : ctx_{std::move(ctx)} {}
+template <bool Condition, typename Type = void>
+using Require = std::enable_if_t<Condition, Type>;
 
-    auto& context() noexcept {
-        using detail::get_connection_context;
-        return get_connection_context(ctx_);
-    }
-    const auto& context() const noexcept {
-        using detail::get_connection_context;
-        return get_connection_context(ctx_);
-    }
-
-    decltype(auto) get_io_context() noexcept {return context().socket_.get_io_context();}
-
-    /**
-    * Returns a reference to statistics of the connection
-    */
-    auto& statistics() noexcept { return context(ctx_).statistics_;}
-    const auto& statistics() const noexcept {return context(ctx_).statistics_;}
-
-    /**
-    * Returns true for initialized established and good connection
-    */
-    operator bool () const noexcept {return !!(*this); }
-    bool operator ! () const noexcept { 
-        using impl::connection_bad;
-        return !(ctx_ && !connection_bad(context())); 
-    }
-
-    /**
-    * connection can be ConnectionProvider, so it provides itself
-    */
-    template <typename Handler>
-    friend void async_get_connection(connection c, Handler&& h) {
-        get_io_context().dispatch(detail::bind(
-            std::forward<Handler>(h), error_code{}, std::move(c)));
-    }
-
-private:
-    ContextHolder ctx_;
+template <typename T>
+using IsConnection = Require<Connection<T>>;
+/**
+* Connection is Connection Provider itself, so we need to define connection
+* type it provides.
+*/
+template <typename T>
+struct get_connection_type<T, IsConnection<T>> {
+    using type = std::decay_t<T>;
 };
 
-template <typename Ctx>
-inline bool operator == (const connection<Ctx>& l, const connection<Ctx>& r) noexcept {
-    return std::addressof(l.context()) == std::addressof(r.context());
+
+template <typename T, typename = std::void_t<>>
+struct has_operator_not : std::false_type {};
+template <typename T>
+struct has_operator_not<T, std::void_t<decltype(!std::declval<T>())>>
+    : std::true_type {};
+
+template <typename T>
+constexpr auto OperatorNot = has_operator_not<std::decay_t<T>>::value;
+/**
+* Connection public traits section 
+*/
+
+template <typename T>
+inline decltype(auto) get_connection_context(T&& conn, 
+        Require<Connection<T> && !ConnectionWrapper<T>>* = 0) noexcept {
+    return std::forward<T>(conn);
 }
 
-template <typename Ctx>
-inline bool operator != (const connection<Ctx>& l, const connection<Ctx>& r) noexcept {
-    return !(l == r);
+template <typename T>
+inline decltype(auto) get_connection_context(T&& conn, 
+        Require<ConnectionWrapper<T>>* = 0) noexcept {
+    return *conn;
 }
 
-template <typename T, typename Ctx>
-inline auto type_oid(const connection<Ctx>& conn) noexcept {
-    return type_oid<std::decay_t<T>>(conn.context().oid_map_);
+template <typename T, typename = IsConnection<T>>
+inline decltype(auto) get_connection_io_context(T& conn) noexcept {
+    using impl::get_connection_io_context;
+    return get_connection_io_context(get_connection_context(conn));
 }
 
-template <typename T, typename Ctx>
-inline auto type_oid(const connection<Ctx>& conn, const T&) noexcept {
-    return type_oid<std::decay_t<T>>(conn);
+template <typename T, typename = IsConnection<T>>
+inline decltype(auto) get_connection_oid_map(T&& conn) noexcept {
+    using impl::get_connection_oid_map;
+    return get_connection_oid_map(
+        get_connection_context(std::forward<T>(conn)));
 }
 
-template <typename T, typename Ctx>
-inline void set_type_oid(connection<Ctx>& conn, oid_t oid) noexcept {
-    set_type_oid<T>(conn.context().oid_map_, oid);
+template <typename T, typename = IsConnection<T>>
+inline decltype(auto) get_connection_statistics(T&& conn) noexcept {
+    using impl::get_connection_statistics;
+    return get_connection_statistics(
+        get_connection_context(std::forward<T>(conn)));
+}
+
+template <typename T>
+inline Require<Connection<T> && !OperatorNot<T>,
+bool> connection_bad(const T& conn) noexcept { 
+    using impl::connection_bad;
+    return connection_bad(get_connection_context(conn));
+}
+
+template <typename T>
+inline Require<Connection<T> && OperatorNot<T>,
+bool> connection_bad(const T& conn) noexcept {
+    using impl::connection_bad;
+    return !conn || connection_bad(get_connection_context(conn));
+}
+
+template <typename T, typename = IsConnection<T>>
+inline bool connection_good(const T& conn) noexcept { 
+    return !connection_bad(conn);
+}
+
+template <typename T, typename = IsConnection<T>>
+inline decltype(auto) get_pg_native_handle(T&& conn) noexcept {
+    using impl::get_pg_native_handle;
+    return get_pg_native_handle(
+        get_connection_context(std::forward<T>(conn)));
+}
+
+template <typename T, typename Handle, typename = IsConnection<T>>
+inline void set_pg_native_handle(T& conn, Handle&& handle) noexcept {
+    using impl::get_pg_native_handle;
+    set_pg_native_handle(
+        get_connection_context(std::forward<T>(conn)), std::forward<Handle>(handle));
+}
+
+template <typename T, typename = IsConnection<T>>
+inline decltype(auto) get_connection_socket(T&& conn) noexcept {
+    using impl::get_connection_socket;
+    return get_connection_socket(
+        get_connection_context(std::forward<T>(conn)));
+}
+
+// Oid Map helpers
+
+template <typename T, typename C, typename = IsConnection<C>>
+inline decltype(auto) type_oid(C&& conn) noexcept {
+    return type_oid<std::decay_t<T>>(
+        get_connection_oid_map(std::forward<C>(conn)));
+}
+
+template <typename T, typename C, typename = IsConnection<C>>
+inline decltype(auto) type_oid(C&& conn, const T&) noexcept {
+    return type_oid<std::decay_t<T>>(std::forward<C>(conn));
+}
+
+template <typename T, typename C, typename = IsConnection<C>>
+inline void set_type_oid(C&& conn, oid_t oid) noexcept {
+    set_type_oid<T>(get_connection_oid_map(std::forward<C>(conn)), oid);
+}
+
+/**
+* Function to get connection from provider asynchronously via callback. 
+* This is customization point which allows to work with different kinds
+* of connection providing. E.g. single connection, get connection from 
+* pool, lazy connection, retriable connection and so on. 
+*/
+template <typename ConnectionProvider, typename Handler>
+inline Require<!Connection<ConnectionProvider>>
+async_get_connection(ConnectionProvider&& provider, Handler&& handler) {
+    provider(std::forward<Handler>(handler));
+}
+
+template <typename ConnectionProvider, typename Handler>
+inline Require<Connection<ConnectionProvider>>
+async_get_connection(ConnectionProvider&& conn, Handler&& handler) {
+    decltype(auto) io = get_connection_io_context(conn);
+    io.dispatch(detail::bind(
+        std::forward<Handler>(handler), error_code{}, std::forward<ConnectionProvider>(conn)));
 }
 
 /**
 * Function to get a connection from provider. 
-* Accepts:,
+* Accepts:
 *   provider - connection provider which will be asked for connection
 *   token - completion token which determine the continuation of operation
 *           it can be callback, yield_context, use_future and other Boost.Asio
