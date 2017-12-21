@@ -10,9 +10,6 @@
 
 namespace libapq {
 
-template <typename, typename = std::void_t<>>
-struct is_connection : std::false_type {};
-
 namespace impl {
 
 using pg_native_handle_type = PGconn*;
@@ -31,62 +28,57 @@ struct connection {
 };
 
 template <typename ...Ts>
-inline pg_native_handle_type get_pg_native_handle(
-        const connection<Ts...>& ctx) noexcept {
-    return ctx.handle_.get();
+inline const auto& get_connection_handle(const connection<Ts...>& ctx) noexcept {
+    return ctx.handle_;
 }
 
 template <typename ...Ts>
-inline void set_pg_native_handle(
-        connection<Ts...>& ctx, pg_conn_handle&& new_one) noexcept {
-    ctx.handle_ = new_one;
+inline auto& get_connection_handle(connection<Ts...>& ctx) noexcept {
+    return ctx.handle_;
 }
 
-template <typename ...Ts>
-inline bool connection_bad(
-        const connection<Ts...>& ctx) noexcept {
-    decltype(auto) handle = get_pg_native_handle(ctx);
+inline bool connection_bad(pg_native_handle_type handle) noexcept {
     return !handle || PQstatus(handle) == CONNECTION_BAD;
 }
 
 template <typename ...Ts>
-inline decltype(auto) get_connection_socket(
+inline const auto& get_connection_socket(
         const connection<Ts...>& ctx) noexcept {
     return ctx.socket_;
 }
 
 template <typename ...Ts>
-inline decltype(auto) get_connection_socket(
+inline auto& get_connection_socket(
         connection<Ts...>& ctx) noexcept {
     return ctx.socket_;
 }
 
 template <typename ...Ts>
-inline decltype(auto) get_connection_io_context(
+inline auto& get_connection_io_context(
         connection<Ts...>& ctx) noexcept {
     return get_connection_socket(ctx).get_io_context();
 }
 
 template <typename ...Ts>
-inline decltype(auto) get_connection_oid_map(
+inline const auto& get_connection_oid_map(
         const connection<Ts...>& ctx) noexcept {
     return ctx.oid_map_;
 }
 
 template <typename ...Ts>
-inline decltype(auto) get_connection_oid_map(
+inline auto& get_connection_oid_map(
         connection<Ts...>& ctx) noexcept {
     return ctx.oid_map_;
 }
 
 template <typename ...Ts>
-inline decltype(auto) get_connection_statistics(
+inline const auto& get_connection_statistics(
         const connection<Ts...>& ctx) noexcept {
     return ctx.statistics_;
 }
 
 template <typename ...Ts>
-inline decltype(auto) get_connection_statistics(
+inline auto& get_connection_statistics(
         connection<Ts...>& ctx) noexcept {
     return ctx.statistics_;
 }
@@ -135,8 +127,5 @@ inline error_code rebind_io_context(Connection&& conn, io_context& io) {
 }
 
 } // namespace impl
-
-template <typename ...Ts>
-struct is_connection<impl::connection<Ts...>> : std::true_type {};
 
 } // namespace libapq

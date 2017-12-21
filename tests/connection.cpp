@@ -16,6 +16,9 @@ enum class native_handle { bad, good };
 struct test_conn_handle {
     native_handle v;
     test_conn_handle(native_handle v) : v(v) {}
+    friend bool connection_bad(const test_conn_handle* h) { 
+        return h->v == native_handle::bad;
+    }
 };
 
 using empty_oid_map = decltype(libapq::register_types<>());
@@ -26,20 +29,30 @@ struct connection_ctx {
     int socket_ = 0;
     OidMap oid_map_;
 
-    friend bool connection_bad(const connection_ctx& conn) { 
-        return conn.handle_->v == native_handle::bad;
+    friend OidMap& get_connection_oid_map(connection_ctx& conn) {
+        return conn.oid_map_;
+    }
+    friend const OidMap& get_connection_oid_map(const connection_ctx& conn) {
+        return conn.oid_map_;
+    }
+    friend int& get_connection_socket(connection_ctx& conn) {
+        return conn.socket_;
+    }
+    friend const int& get_connection_socket(const connection_ctx& conn) {
+        return conn.socket_;
+    }
+    friend std::unique_ptr<test_conn_handle>& 
+    get_connection_handle(connection_ctx& conn) {
+        return conn.handle_;
+    }
+    friend const std::unique_ptr<test_conn_handle>& 
+    get_connection_handle(const connection_ctx& conn) {
+        return conn.handle_;
     }
 };
 
 template <typename ...Ts>
 using connection = std::shared_ptr<connection_ctx<Ts...>>;
-
-namespace libapq {
-
-template <typename ...Ts>
-struct is_connection<::connection_ctx<Ts...>> : std::true_type {};
-
-}
 
 GTEST("libapq::connection_good()", "[for object with bad handle returns false]") {
     auto ctx = std::make_shared<connection_ctx<>>();

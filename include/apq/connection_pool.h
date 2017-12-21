@@ -19,18 +19,19 @@ using pooled_connection_ptr = std::shared_ptr<pooled_connection<Ts...>>;
 
 template <typename T>
 struct is_connection_wrapper<
-    yamail::resource_pool::handle<
-        yamail::resource_pool::async::pool<T>
-    >> : is_connection<T> {};
+    yamail::resource_pool::handle<T>
+    > : std::true_type {};
 
 template <typename T>
 struct is_connection_wrapper< std::shared_ptr<
-    yamail::resource_pool::handle<
-        yamail::resource_pool::async::pool<T>
-    >>> : is_connection<T> {};
+    yamail::resource_pool::handle<T>
+    >> : std::true_type {};
 
-static_assert(Connection<impl::pooled_connection_ptr<empty_oid_map, no_statistics>>, 
-    "pooled_connection_ptr is not a Connection concept");
+static_assert(Connectiable<impl::pooled_connection_ptr<empty_oid_map, no_statistics>>, 
+    "pooled_connection_ptr is not a Connectiable concept");
+
+static_assert(ConnectionProvider<impl::pooled_connection_ptr<empty_oid_map, no_statistics>>, 
+    "pooled_connection_ptr is not a ConnectionProvider concept");
 
 class connection_pool {
 public:
