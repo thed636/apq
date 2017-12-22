@@ -141,15 +141,6 @@ inline decltype(auto) unwrap_connection(T&& conn,
 }
 
 /**
-* Returns io_context for connection is bound to.
-*/
-template <typename T, typename = Require<Connectiable<T>>>
-inline decltype(auto) get_io_context(T& conn) noexcept {
-    using impl::get_connection_io_context;
-    return get_connection_io_context(unwrap_connection(conn));
-}
-
-/**
 * Returns PostgreSQL connection handle of the connection.
 */
 template <typename T, typename = Require<Connectiable<T>>>
@@ -177,13 +168,21 @@ inline decltype(auto) get_socket(T&& conn) noexcept {
 }
 
 /**
+* Returns io_context for connection is bound to.
+*/
+template <typename T, typename = Require<Connectiable<T>>>
+inline decltype(auto) get_io_context(T& conn) noexcept {
+    return get_socket(conn).get_io_context();
+}
+
+/**
 * Indicates if connection is bad
 */
 template <typename T>
 inline Require<Connectiable<T> && !OperatorNot<T>,
 bool> connection_bad(const T& conn) noexcept { 
-    using impl::connection_bad;
-    return connection_bad(get_native_handle(conn));
+    using impl::connection_status_bad;
+    return connection_status_bad(get_native_handle(conn));
 }
 
 /**
@@ -193,8 +192,8 @@ bool> connection_bad(const T& conn) noexcept {
 template <typename T>
 inline Require<ConnectionWrapper<T> && OperatorNot<T>,
 bool> connection_bad(const T& conn) noexcept {
-    using impl::connection_bad;
-    return !conn || connection_bad(get_native_handle(conn));
+    using impl::connection_status_bad;
+    return !conn || connection_status_bad(get_native_handle(conn));
 }
 
 /**
@@ -203,6 +202,13 @@ bool> connection_bad(const T& conn) noexcept {
 template <typename T, typename = Require<Connectiable<T>>>
 inline bool connection_good(const T& conn) noexcept {
     return !connection_bad(conn);
+}
+
+
+template <typename T, typename = Require<Connectiable<T>>>
+inline std::string error_message(T& conn) {
+    using impl::connection_error_message;
+    return connection_error_message(get_native_handle(conn));
 }
 
 /**
@@ -256,7 +262,7 @@ async_get_connection(T&& provider, Handler&& handler) {
 template <typename T, typename Handler>
 inline Require<Connection<T> || ConnectionWrapper<T>>
 async_get_connection(T&& conn, Handler&& handler) {
-    decltype(auto) io = get_connection_io_context(conn);
+    decltype(auto) io = get_io_context(conn);
     io.dispatch(detail::bind(
         std::forward<Handler>(handler), error_code{}, std::forward<T>(conn)));
 }

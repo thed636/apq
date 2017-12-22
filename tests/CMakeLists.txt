@@ -27,6 +27,7 @@ include_directories(SYSTEM "${source_dir}/libs/json/src")
 link_directories("${source_dir}/libs/gherkin-cpp")
 
 set(SOURCES
+    async_connect.cpp
     connection_pool.cpp
     type_traits.cpp
     connection.cpp

@@ -37,7 +37,7 @@ inline auto& get_connection_handle(connection<Ts...>& ctx) noexcept {
     return ctx.handle_;
 }
 
-inline bool connection_bad(pg_native_handle_type handle) noexcept {
+inline bool connection_status_bad(pg_native_handle_type handle) noexcept {
     return !handle || PQstatus(handle) == CONNECTION_BAD;
 }
 
@@ -51,12 +51,6 @@ template <typename ...Ts>
 inline auto& get_connection_socket(
         connection<Ts...>& ctx) noexcept {
     return ctx.socket_;
-}
-
-template <typename ...Ts>
-inline auto& get_connection_io_context(
-        connection<Ts...>& ctx) noexcept {
-    return get_connection_socket(ctx).get_io_context();
 }
 
 template <typename ...Ts>
@@ -83,9 +77,8 @@ inline auto& get_connection_statistics(
     return ctx.statistics_;
 }
 
-template <typename Connection>
-inline std::string error_message(Connection& conn) {
-    const char* msg = PQerrorMessage(get_native_handle(conn));
+inline std::string connection_error_message(pg_native_handle_type handle) {
+    const char* msg = PQerrorMessage(handle);
     return msg ? boost::trim_right_copy(std::string(msg)) : std::string{};
 }
 

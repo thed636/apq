@@ -16,7 +16,7 @@ enum class native_handle { bad, good };
 struct test_conn_handle {
     native_handle v;
     test_conn_handle(native_handle v) : v(v) {}
-    friend bool connection_bad(const test_conn_handle* h) { 
+    friend bool connection_status_bad(const test_conn_handle* h) { 
         return h->v == native_handle::bad;
     }
 };
