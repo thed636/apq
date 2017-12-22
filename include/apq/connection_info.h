@@ -6,7 +6,6 @@
 #include <chrono>
 
 namespace libapq {
-
 namespace detail {
 
 template <typename Handler, typename Connection>
@@ -33,22 +32,20 @@ class connection_info {
     std::string raw_;
     Statistics statistics_;
 
-    using connection_ctx = impl::connection<OidMap, Statistics>;
+    using connection = impl::connection<OidMap, Statistics>;
 public:
     connection_info(io_context& io, std::string conn_str, Statistics statistics = Statistics{})
     : io_(io), conn_str_(std::move(conn_str)), timeout_(timeout), statistics_(statistics) {}
 
     std::string to_string() const {return raw_;}
 
-    using connection_type = std::shared_ptr<connection_ctx>;
-
     io_context& get_io_context() {return io_;}
 
     template <typename Handler>
     friend void async_get_connection(const connection_info& self, Handler&& h) {
-        using handler_type = detail::connection_handler<std::decay_t<Handler>, connection_type>;
+        using handler_type = detail::connection_handler<std::decay_t<Handler>, connection>;
 
-        auto conn = std::make_shared<connection_ctx>(
+        auto conn = std::make_shared<connection>(
             self.get_io_context(), self.statistics_);
 
         impl::async_connect(ctx, self.to_string(), 

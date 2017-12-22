@@ -7,43 +7,67 @@
 namespace libapq {
 namespace impl {
 
-template <typename Handler, typename Connection>
-inline void write_poll(Connection& conn, Handler&& h) {
-    get_connection_socket(conn).async_write_some(
+template <typename T, typename Handler, typename = IsConnectiable<T>>
+inline void write_poll(T& conn, Handler&& h) {
+    get_socket(conn).async_write_some(
             asio::null_buffers(), std::forward<Handler>(h));
 }
 
-template <typename Handler, typename Connection>
-inline void read_poll(Connection& conn, Handler&& h) {
-    get_connection_socket(conn).async_read_some(
+template <typename T, typename Handler, typename = IsConnectiable<T>>
+inline void read_poll(T& conn, Handler&& h) {
+    get_socket(conn).async_read_some(
             asio::null_buffers(), std::forward<Handler>(h));
 }
 
-template <typename Connection>
-inline decltype(auto) connect_poll(Connection& conn) {
-    return PQconnectPoll(get_pg_native_handle(conn));
+template <typename T, typename = IsConnectiable<T>>
+inline decltype(auto) connect_poll(T& conn) {
+    return PQconnectPoll(get_native_handle(conn));
 }
 
-template <typename Handler, typename Connection>
-inline error_code start_connection(Connection& conn, const std::string& conninfo) {
+template <typename T, typename = IsConnectiable<T>>
+inline error_code start_connection(T& conn, const std::string& conninfo) {
     pg_conn_handle handle(PQconnectStart(conninfo.c_str()), PQfinish);
     if (!handle) {
         return done(make_error_code(error::network, "Failed to allocate a new PGconn"));
     }
-    set_pg_native_handle(conn, std::move(handle));
+    get_handle(conn) = std::move(handle);
     return {};
+}
+
+template <typename T, typename = IsConnectiable<T>>
+inline error_code assign_socket(T& conn) {
+    int fd = PQsocket(get_native_handle(conn));
+    if (fd == -1) {
+        return make_error_code(error::network,
+            "No server connection is currently open, no PQsocket");
+    }
+
+    int new_fd = dup(fd);
+    if (new_fd == -1) {
+        using namespace boost::system;
+        return make_error_code(error_code{errno, get_posix_category()},
+            "dup(fd)");
+    }
+
+    error_code ec;
+    get_socket(conn).assign(new_fd, ec);
+
+    return ec;
 }
 
 /**
 * Asynchronous connection operation
 */
-template <typename Handler, typename Context>
+template <typename Handler, typename Connection>
 struct async_connect_op {
-    Context& conn_;
+    static_assert(Connectiable<Connection>,
+        "Connection type does not meet Connectiable requirements");
+
+    Connection& conn_;
     Handler handler_;
 
     void done(error_code ec = error_code{}) {
-        get_connection_io_context(conn_)
+        get_io_context(conn_)
             .post(bind(std::move(handler_), std::move(ec)));
     }
 
@@ -105,7 +129,7 @@ struct async_connect_op {
 template <typename Connection, typename Handler>
 inline void async_connect(const std::string& conninfo, Connection& conn,
         Handler&& handler) {
-    async_connect_op<std::decay_t<Handler>, Connection> {
+    async_connect_op<std::decay_t<Handler>, std::decay_t<Connection>> {
         conn, std::forward<Handler>(handler)
     }.perform(conninfo);
 }

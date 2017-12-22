@@ -28,6 +28,14 @@ using no_statistics = decltype(hana::make_map());
 template <typename, typename = std::void_t<>>
 struct is_connection : std::false_type {};
 
+/**
+* This is how connection is determined.
+* Connection is an object for which these next free functions
+* are applicable:
+*       get_connection_oid_map(),
+*       get_connection_socket(),
+*       get_connection_handle()
+*/
 template <typename T>
 struct is_connection<T, std::void_t<
     decltype(get_connection_oid_map(std::declval<T&>())),
@@ -73,14 +81,12 @@ constexpr auto ConnectionProviderFunctor = is_connection_provider_functor<std::d
 template <bool Condition, typename Type = void>
 using Require = std::enable_if_t<Condition, Type>;
 
-template <typename T>
-using IsConnectiable = Require<Connectiable<T>>;
 /**
 * Connection is Connection Provider itself, so we need to define connection
 * type it provides.
 */
 template <typename T>
-struct get_connection_type<T, IsConnectiable<T>> {
+struct get_connection_type<T, Require<Connectiable<T>>> {
     using type = std::decay_t<T>;
 };
 
@@ -93,53 +99,97 @@ struct has_operator_not<T, std::void_t<decltype(!std::declval<T>())>>
 
 template <typename T>
 constexpr auto OperatorNot = has_operator_not<std::decay_t<T>>::value;
+
 /**
-* Connection public traits section 
+* Connection type traits
+*/
+template <typename T>
+struct connection_traits {
+    using oid_map = std::decay_t<decltype(get_connection_oid_map(std::declval<T&>()))>;
+    using socket = std::decay_t<decltype(get_connection_socket(std::declval<T&>()))>;
+    using handle = std::decay_t<decltype(get_connection_handle(std::declval<T&>()))>;
+};
+
+/**
+* Metafunction to get connection traits from object
+*/
+template <typename T, typename = Require<Connection<T>>>
+constexpr connection_traits<std::decay_t<T>> get_connection_traits(T&&);
+
+/**
+* Connection public access functions section 
 */
 
+/**
+* Overloaded version of unwrap function for Connection.
+* Returns connection object itself.
+*/
 template <typename T>
 inline decltype(auto) unwrap_connection(T&& conn, 
         Require<Connection<T>>* = 0) noexcept {
     return std::forward<T>(conn);
 }
 
+/**
+* Unwraps wrapped connection recusively.
+* Returns unwrapped connection object.
+*/
 template <typename T>
 inline decltype(auto) unwrap_connection(T&& conn, 
         Require<ConnectionWrapper<T>>* = 0) noexcept {
-    return *conn;
+    return unwrap_connection(*conn);
 }
 
-template <typename T, typename = IsConnectiable<T>>
+/**
+* Returns io_context for connection is bound to.
+*/
+template <typename T, typename = Require<Connectiable<T>>>
 inline decltype(auto) get_io_context(T& conn) noexcept {
     using impl::get_connection_io_context;
     return get_connection_io_context(unwrap_connection(conn));
 }
 
-template <typename T, typename = IsConnectiable<T>>
+/**
+* Returns PostgreSQL connection handle of the connection.
+*/
+template <typename T, typename = Require<Connectiable<T>>>
 inline decltype(auto) get_handle(T&& conn) noexcept {
     using impl::get_connection_handle;
     return get_connection_handle(
         unwrap_connection(std::forward<T>(conn)));
 }
 
-template <typename T, typename = IsConnectiable<T>>
+/**
+* Returns PostgreSQL native connection handle of the connection.
+*/
+template <typename T, typename = Require<Connectiable<T>>>
 inline decltype(auto) get_native_handle(T&& conn) noexcept {
     return get_handle(std::forward<T>(conn)).get();
 }
 
-template <typename T, typename = IsConnectiable<T>>
+/**
+* Returns socket stream object of the connection.
+*/
+template <typename T, typename = Require<Connectiable<T>>>
 inline decltype(auto) get_socket(T&& conn) noexcept {
     using impl::get_connection_socket;
     return get_connection_socket(unwrap_connection(std::forward<T>(conn)));
 }
 
+/**
+* Indicates if connection is bad
+*/
 template <typename T>
-inline Require<Connection<T>,
+inline Require<Connectiable<T> && !OperatorNot<T>,
 bool> connection_bad(const T& conn) noexcept { 
     using impl::connection_bad;
     return connection_bad(get_native_handle(conn));
 }
 
+/**
+* Indicates if connection is bad. Overloaded version for
+* ConnectionWraper with operator !
+*/
 template <typename T>
 inline Require<ConnectionWrapper<T> && OperatorNot<T>,
 bool> connection_bad(const T& conn) noexcept {
@@ -147,18 +197,27 @@ bool> connection_bad(const T& conn) noexcept {
     return !conn || connection_bad(get_native_handle(conn));
 }
 
-template <typename T, typename = IsConnectiable<T>>
-inline bool connection_good(const T& conn) noexcept { 
+/**
+* Indicates if connection is not bad
+*/
+template <typename T, typename = Require<Connectiable<T>>>
+inline bool connection_good(const T& conn) noexcept {
     return !connection_bad(conn);
 }
 
-template <typename T, typename = IsConnectiable<T>>
+/**
+* Returns type oids map of the connection
+*/
+template <typename T, typename = Require<Connectiable<T>>>
 inline decltype(auto) get_oid_map(T&& conn) noexcept {
     using impl::get_connection_oid_map;
     return get_connection_oid_map(unwrap_connection(std::forward<T>(conn)));
 }
 
-template <typename T, typename = IsConnectiable<T>>
+/**
+* Returns statistics object of the connection
+*/
+template <typename T, typename = Require<Connectiable<T>>>
 inline decltype(auto) get_statistics(T&& conn) noexcept {
     using impl::get_connection_statistics;
     return get_connection_statistics(unwrap_connection(std::forward<T>(conn)));
@@ -166,18 +225,18 @@ inline decltype(auto) get_statistics(T&& conn) noexcept {
 
 // Oid Map helpers
 
-template <typename T, typename C, typename = IsConnectiable<C>>
+template <typename T, typename C, typename = Require<Connectiable<C>>>
 inline decltype(auto) type_oid(C&& conn) noexcept {
     return type_oid<std::decay_t<T>>(
         get_oid_map(std::forward<C>(conn)));
 }
 
-template <typename T, typename C, typename = IsConnectiable<C>>
+template <typename T, typename C, typename = Require<Connectiable<C>>>
 inline decltype(auto) type_oid(C&& conn, const T&) noexcept {
     return type_oid<std::decay_t<T>>(std::forward<C>(conn));
 }
 
-template <typename T, typename C, typename = IsConnectiable<C>>
+template <typename T, typename C, typename = Require<Connectiable<C>>>
 inline void set_type_oid(C&& conn, oid_t oid) noexcept {
     set_type_oid<T>(get_oid_map(std::forward<C>(conn)), oid);
 }
@@ -206,7 +265,7 @@ template <typename, typename = std::void_t<>>
 struct is_connection_provider : std::false_type {};
 template <typename T>
 struct is_connection_provider<T, std::void_t<
-    decltype( async_get_connection(std::declval<T&>(), std::declval<void(error_code, connection_type<T>)>()) )
+    decltype( async_get_connection(std::declval<T&>(), std::function<void(error_code, connection_type<T>)>()) )
 >> : std::true_type {};
 
 template <typename T>

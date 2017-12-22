@@ -84,38 +84,17 @@ inline auto& get_connection_statistics(
 }
 
 template <typename Connection>
-inline std::string error_message(Connection&& conn) {
-    const char* msg = PQerrorMessage(get_pg_native_handle(std::forward<Connection>(conn)));
+inline std::string error_message(Connection& conn) {
+    const char* msg = PQerrorMessage(get_native_handle(conn));
     return msg ? boost::trim_right_copy(std::string(msg)) : std::string{};
 }
 
 template <typename Connection>
-inline error_code assign_socket(Connection&& conn) {
-    int fd = PQsocket(get_pg_native_handle(conn));
-    // if (fd == -1) {
-    //     return make_error_code(error::network,
-    //         "No server connection is currently open, no PQsocket");
-    // }
-
-    int new_fd = dup(fd);
-    if (new_fd == -1) {
-        using namespace boost::system;
-        return make_error_code(error_code{errno, get_posix_category()},
-            "dup(fd)");
-    }
-
-    error_code ec;
-    get_connection_socket(conn).assign(new_fd, ec);
-
-    return ec;
-}
-
-template <typename Connection>
-inline error_code rebind_io_context(Connection&& conn, io_context& io) {
-    if (std::addressof(get_connection_io_service(conn)) != std::addressof(io)) {
+inline error_code rebind_connection_io_context(Connection& conn, io_context& io) {
+    if (std::addressof(get_io_service(conn)) != std::addressof(io)) {
         asio::posix::stream_descriptor s{io};
         error_code ec;
-        decltype(auto) socket = get_connection_socket(conn);
+        decltype(auto) socket = get_socket(conn);
         s.assign(socket.native_handle(), ec);
         if (ec) {
             return ec;
@@ -127,5 +106,4 @@ inline error_code rebind_io_context(Connection&& conn, io_context& io) {
 }
 
 } // namespace impl
-
 } // namespace libapq
